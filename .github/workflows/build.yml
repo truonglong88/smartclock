@@ -1,0 +1,45 @@
+name: Build firmware
+
+# Mỗi lần push thay đổi trong firmware/ hoặc scripts/ lên main:
+# build → cập nhật release/firmware.bin + release/version.txt → màn hình tự cài trong ≤5 phút.
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**", "scripts/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-firmware
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: .toolchain
+          key: toolchain-${{ hashFiles('scripts/build.sh') }}
+
+      - name: Build
+        run: ./scripts/build.sh
+
+      - name: Publish to release/
+        run: |
+          NEW=$(cat build/version.txt)
+          OLD=$(cat release/version.txt 2>/dev/null || echo none)
+          if [ "$NEW" = "$OLD" ]; then
+            echo "::warning::FW_VERSION vẫn là $NEW — tăng FW_VERSION trong smartclock.ino để màn hình nhận bản mới. Bỏ qua phát hành."
+            exit 0
+          fi
+          cp build/firmware.bin build/version.txt release/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add release/
+          git commit -m "release: v$NEW"
+          git push

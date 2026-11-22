@@ -1,0 +1,4 @@
+.toolchain/
+build/
+*.bin
+!release/firmware.bin
