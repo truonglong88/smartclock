@@ -19,11 +19,13 @@
 #include <TFT_eSPI.h>
 #include <time.h>
 
-#define FW_VERSION "1.2.0"
+#define FW_VERSION "1.2.1"
 #define DEFAULT_OTA_URL "https://raw.githubusercontent.com/truonglong88/smartclock/main/release/"
 const float LAT = 10.78, LON = 106.70;          // TP.HCM
 
 TFT_eSPI tft;
+TFT_eSprite eyeSpr = TFT_eSprite(&tft);
+const int SPR_W = 220, SPR_H = 130, SPR_X = 10, SPR_Y = 30;
 ESP8266WebServer server(80);
 ESP8266HTTPUpdateServer httpUpdater;
 
@@ -124,10 +126,19 @@ void checkOta() {
   if (code != 200) { otaStatus = "version.txt HTTP " + String(code); return; }
   if (v == FW_VERSION) { otaStatus = "dang moi nhat (" + v + ")"; return; }
   statusScreen("Dang cap nhat", String(FW_VERSION) + " -> " + v, "dung rut dien");
+  // Tải firmware cần bộ đệm nhận TLS đủ 16KB: GitHub gửi bản ghi TLS 16KB, bộ đệm nhỏ hơn sẽ đứt giữa chừng
+  client.stop();
+  eyeSpr.deleteSprite();   // nhả ~3.5KB RAM cho TLS
+  BearSSL::WiFiClientSecure dl; dl.setInsecure(); dl.setBufferSizes(16384, 512);
+  Serial.printf("[ota] %s -> %s, heap %u\n", FW_VERSION, v.c_str(), ESP.getFreeHeap());
   ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   ESPhttpUpdate.rebootOnUpdate(true);
-  t_httpUpdate_return r = ESPhttpUpdate.update(client, base + "firmware.bin?v=" + v);
+  t_httpUpdate_return r = ESPhttpUpdate.update(dl, base + "firmware.bin?v=" + v);
   otaStatus = "cap nhat loi: " + ESPhttpUpdate.getLastErrorString();
+  Serial.println("[ota] " + otaStatus);
+  statusScreen("Cap nhat loi", ESPhttpUpdate.getLastErrorString().substring(0, 30), "giu ban " FW_VERSION);
+  delay(5000);
+  eyeSpr.createSprite(SPR_W, SPR_H);
   lastMinute = lastDay = -1; weatherDirty = fxDirty = true; tft.fillScreen(C_BG);
   (void)r;
 }
@@ -233,8 +244,6 @@ void drawFooter() {
 }
 
 // ================= MẮT ROBOT =================
-TFT_eSprite eyeSpr = TFT_eSprite(&tft);
-const int SPR_W = 220, SPR_H = 130, SPR_X = 10, SPR_Y = 30;
 struct Eye { float x, y, h, w, tilt, happy; };
 Eye cur = {0, 0, 90, 70, 0, 0}, tgt = cur;
 unsigned long nextLook = 0, nextBlink = 0, blinkStart = 0, surpriseUntil = 0;
