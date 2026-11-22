@@ -10,7 +10,7 @@
 #define TFT_RST   2
 #define TFT_SPI_MODE SPI_MODE3
 #define TFT_INVERSION_ON
-#define TFT_RGB_ORDER TFT_RGB
+#define TFT_RGB_ORDER TFT_BGR   // đã kiểm chứng: chớp đỏ-lá-dương hiện ra dương-lá-đỏ khi đặt RGB
 #define SPI_FREQUENCY 20000000
 #define LOAD_GLCD
 #define LOAD_FONT2
