@@ -2,6 +2,7 @@
 // - Đồng hồ chạy từng giây (NTP, giờ Việt Nam)
 // - Thời tiết TP.HCM (Open-Meteo, không cần API key)
 // - Tỷ giá USD/VND (open.er-api.com)
+// - Mắt robot: liếc, chớp, cảm xúc theo thời tiết / giờ
 // - Cài WiFi qua điện thoại (WiFiManager), truy cập http://smartclock.local
 // - Cập nhật firmware qua web (/update) và TỰ cập nhật từ GitHub (5 phút/lần)
 
@@ -18,7 +19,7 @@
 #include <TFT_eSPI.h>
 #include <time.h>
 
-#define FW_VERSION "1.1.1"
+#define FW_VERSION "1.2.0"
 #define DEFAULT_OTA_URL "https://raw.githubusercontent.com/truonglong88/smartclock/main/release/"
 const float LAT = 10.78, LON = 106.70;          // TP.HCM
 
@@ -37,12 +38,13 @@ bool weatherDirty = true, fxDirty = true;
 int lastMinute = -1, lastDay = -1;
 
 // ---- cấu hình lưu EEPROM: URL tự cập nhật ----
-struct Config { uint32_t magic; char otaUrl[160]; } cfg;
+struct Config { uint32_t magic; char otaUrl[160]; uint8_t mode; } cfg;  // mode: 0 xoay, 1 đồng hồ, 2 mắt
 const uint32_t MAGIC = 0x5C10C001;
 void loadCfg() {
   EEPROM.begin(sizeof(Config)); EEPROM.get(0, cfg);
   if (cfg.magic != MAGIC) { memset(&cfg, 0, sizeof cfg); cfg.magic = MAGIC; }
   if (!cfg.otaUrl[0]) strncpy(cfg.otaUrl, DEFAULT_OTA_URL, sizeof(cfg.otaUrl) - 1);
+  if (cfg.mode > 2) cfg.mode = 0;
 }
 void saveCfg() { EEPROM.put(0, cfg); EEPROM.commit(); }
 
@@ -136,6 +138,10 @@ void handleRoot() {
   String h = F("<!doctype html><meta name=viewport content='width=device-width'><style>body{font-family:sans-serif;max-width:520px;margin:20px auto;padding:0 12px}input{width:100%;padding:8px;box-sizing:border-box}button{padding:8px 14px;margin-top:8px}</style><h2>Smart Clock</h2>");
   h += "<p>Firmware <b>" FW_VERSION "</b> &middot; IP " + WiFi.localIP().toString() + " &middot; RSSI " + WiFi.RSSI() + " dBm &middot; RAM trong " + ESP.getFreeHeap() + " B</p>";
   h += "<p>Nhiet do: " + String(tempC, 1) + " C, do am " + humid + "% &middot; USD/VND: " + String(usdVnd, 0) + "</p>";
+  const char* modes[] = {"Xoay vong (dong ho 40s / mat 20s)", "Chi dong ho", "Chi mat robot"};
+  h += "<h3>Che do hien thi</h3><form method=post action=/mode>";
+  for (int i = 0; i < 3; i++) h += "<label><input type=radio name=m value=" + String(i) + (cfg.mode == i ? " checked" : "") + " style='width:auto'> " + modes[i] + "</label><br>";
+  h += "<button>Luu</button></form>";
   h += "<h3>Tu cap nhat</h3><p>Trang thai: " + otaStatus + "</p><form method=post action=/save><label>URL thu muc chua <code>version.txt</code> va <code>firmware.bin</code></label><input name=ota value='" + String(cfg.otaUrl) + "' placeholder='https://raw.githubusercontent.com/ban/smartclock/main/release/'><button>Luu</button></form>";
   h += "<form method=post action=/check><button>Kiem tra cap nhat ngay</button></form>";
   h += "<h3>Nap firmware bang tay</h3><p><a href=/update>/update</a> &middot; <a href=/wifi-reset onclick=\"return confirm('Xoa WiFi?')\">Xoa WiFi</a></p>";
@@ -148,6 +154,10 @@ void setupWeb() {
   server.on("/save", HTTP_POST, []() {
     String u = server.arg("ota"); u.trim();
     strncpy(cfg.otaUrl, u.c_str(), sizeof(cfg.otaUrl) - 1); cfg.otaUrl[sizeof(cfg.otaUrl) - 1] = 0; saveCfg();
+    server.sendHeader("Location", "/"); server.send(303);
+  });
+  server.on("/mode", HTTP_POST, []() {
+    int m = server.arg("m").toInt(); if (m >= 0 && m <= 2) { cfg.mode = m; saveCfg(); }
     server.sendHeader("Location", "/"); server.send(303);
   });
   server.on("/check", HTTP_POST, []() { server.sendHeader("Location", "/"); server.send(303); otaNow = true; });
@@ -222,6 +232,100 @@ void drawFooter() {
   shownIp = ip; footerDirty = false;
 }
 
+// ================= MẮT ROBOT =================
+TFT_eSprite eyeSpr = TFT_eSprite(&tft);
+const int SPR_W = 220, SPR_H = 130, SPR_X = 10, SPR_Y = 30;
+struct Eye { float x, y, h, w, tilt, happy; };
+Eye cur = {0, 0, 90, 70, 0, 0}, tgt = cur;
+unsigned long nextLook = 0, nextBlink = 0, blinkStart = 0, surpriseUntil = 0;
+int eyeMinuteShown = -1;
+enum Page { PAGE_CLOCK, PAGE_EYES } page = PAGE_CLOCK;
+unsigned long pageSince = 0;
+int lastHourSeen = -1;
+
+bool isNight(const struct tm& t) { return t.tm_hour >= 21 || t.tm_hour < 6; }
+
+void eyesPickTarget(const struct tm& t) {
+  unsigned long m = millis();
+  bool night = isNight(t), rain = wcode >= 51, surprised = m < surpriseUntil;
+  tgt.x = random(-28, 29); tgt.y = random(-14, 15);
+  tgt.w = 70; tgt.h = 90; tgt.tilt = 0; tgt.happy = 0;
+  if (surprised)      { tgt.w = 84; tgt.h = 110; tgt.x = 0; tgt.y = -6; }
+  else if (night)     { tgt.h = 34; tgt.y = 14; tgt.x = random(-10, 11); }
+  else if (rain)      { tgt.tilt = 1; tgt.y = random(0, 15); }
+  else if (random(100) < 18) { tgt.happy = 1; tgt.x = random(-12, 13); }
+  nextLook = m + (night ? random(3000, 7000) : random(1200, 4000));
+}
+
+void eyesFrame(const struct tm& t) {
+  unsigned long m = millis();
+  if (m >= nextLook) eyesPickTarget(t);
+  float k = (m < surpriseUntil) ? 0.45f : 0.22f;
+  cur.x += (tgt.x - cur.x) * k; cur.y += (tgt.y - cur.y) * k;
+  cur.w += (tgt.w - cur.w) * k; cur.h += (tgt.h - cur.h) * k;
+  cur.tilt += (tgt.tilt - cur.tilt) * k; cur.happy += (tgt.happy - cur.happy) * k;
+
+  // chớp mắt
+  float hDraw = cur.h;
+  if (!blinkStart && m >= nextBlink) blinkStart = m;
+  if (blinkStart) {
+    unsigned long d = m - blinkStart;
+    if (d < 90) hDraw = cur.h * (1 - d / 90.0f) + 4;
+    else if (d < 180) hDraw = 4 + (cur.h - 4) * ((d - 90) / 90.0f);
+    else { blinkStart = 0; nextBlink = m + (random(100) < 20 ? 250 : random(2000, 6000)); }  // thỉnh thoảng chớp đôi
+  }
+
+  eyeSpr.fillSprite(0);
+  for (int side = 0; side < 2; side++) {
+    int cx = (side == 0 ? 58 : 162) + (int)cur.x, cy = SPR_H / 2 + (int)cur.y;
+    int w = (int)cur.w, h = max(4, (int)hDraw), r = min(20, h / 2);
+    int x0 = cx - w / 2, y0 = cy - h / 2;
+    eyeSpr.fillRoundRect(x0, y0, w, h, r, 1);
+    if (cur.tilt > 0.05f) {  // mí buồn: xệ phía ngoài
+      int drop = (int)(cur.tilt * h * 0.5f);
+      if (side == 0) eyeSpr.fillTriangle(x0 - 2, y0 - 2, x0 + w + 2, y0 - 2, x0 - 2, y0 + drop, 0);
+      else           eyeSpr.fillTriangle(x0 - 2, y0 - 2, x0 + w + 2, y0 - 2, x0 + w + 2, y0 + drop, 0);
+    }
+    if (cur.happy > 0.05f && h > 20) {  // mắt cười ^ ^
+      int eh = (int)(h * 0.55f * cur.happy);
+      eyeSpr.fillEllipse(cx, y0 + h + eh / 3, w * 0.75f, eh, 0);
+    }
+  }
+  bool night = isNight(t);
+  eyeSpr.setBitmapColor(night ? 0xFB20 : 0x07FF, TFT_BLACK);  // cam ban đêm, xanh ngọc ban ngày
+  eyeSpr.pushSprite(SPR_X, SPR_Y);
+
+  if (t.tm_min != eyeMinuteShown) {
+    char c[6]; snprintf(c, sizeof c, "%02d:%02d", t.tm_hour, t.tm_min);
+    centerText(c, 180, 4, night ? 0x7A00 : C_DIM);
+    eyeMinuteShown = t.tm_min;
+  }
+}
+
+void enterPage(Page p) {
+  page = p; pageSince = millis();
+  tft.fillScreen(C_BG);
+  lastMinute = lastDay = -1; eyeMinuteShown = -1;
+  weatherDirty = fxDirty = footerDirty = true;
+}
+
+void updatePage(const struct tm& t) {
+  unsigned long m = millis();
+  // đầu mỗi giờ: giật mình 6 giây (trừ ban đêm)
+  if (t.tm_min == 0 && t.tm_hour != lastHourSeen && !isNight(t) && cfg.mode != 1) {
+    lastHourSeen = t.tm_hour; surpriseUntil = m + 6000; nextLook = 0;
+    if (page != PAGE_EYES) enterPage(PAGE_EYES);
+    return;
+  }
+  if (m < surpriseUntil) return;
+  Page want = page;
+  if (cfg.mode == 1) want = PAGE_CLOCK;
+  else if (cfg.mode == 2) want = PAGE_EYES;
+  else want = (page == PAGE_CLOCK && m - pageSince > 40000) ? PAGE_EYES
+            : (page == PAGE_EYES && m - pageSince > 20000) ? PAGE_CLOCK : page;
+  if (want != page) enterPage(want);
+}
+
 void setup() {
   Serial.begin(115200); delay(200);
   Serial.println("\n[boot] Smart Clock " FW_VERSION);
@@ -232,6 +336,9 @@ void setup() {
   // chớp màu để xác nhận màn hình chạy
   tft.fillScreen(TFT_RED); delay(400); tft.fillScreen(TFT_GREEN); delay(400); tft.fillScreen(TFT_BLUE); delay(400);
   tft.fillScreen(C_BG);
+  eyeSpr.setColorDepth(1);
+  if (!eyeSpr.createSprite(SPR_W, SPR_H)) Serial.println("[eyes] sprite FAIL");
+  randomSeed(ESP.getChipId() ^ micros());
   Serial.println("[boot] tft ok");
   statusScreen("Smart Clock", "Dang ket noi WiFi...", "v" FW_VERSION);
 
@@ -272,7 +379,12 @@ void loop() {
     if (otaNow || slot) { otaNow = false; lastOta = m; checkOta(); }
   }
   static unsigned long lastDraw = 0;
-  if (m - lastDraw >= 250) { lastDraw = m; drawScreen(); drawFooter(); }
+  time_t nowT = time(nullptr); struct tm tt; localtime_r(&nowT, &tt);
+  bool timeOk = nowT > 1700000000;
+  if (timeOk) updatePage(tt);
+  if (page == PAGE_EYES && timeOk) {
+    if (m - lastDraw >= 33) { lastDraw = m; eyesFrame(tt); drawFooter(); }   // ~30 fps
+  } else if (m - lastDraw >= 250) { lastDraw = m; drawScreen(); drawFooter(); }
   // tự kết nối lại nếu rớt WiFi quá 30s
   static unsigned long lostSince = 0;
   if (WiFi.status() != WL_CONNECTED) {
