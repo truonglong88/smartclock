@@ -19,7 +19,7 @@
 #include <TFT_eSPI.h>
 #include <time.h>
 
-#define FW_VERSION "1.2.1"
+#define FW_VERSION "1.2.2"
 #define DEFAULT_OTA_URL "https://raw.githubusercontent.com/truonglong88/smartclock/main/release/"
 const float LAT = 10.78, LON = 106.70;          // TP.HCM
 
@@ -41,14 +41,20 @@ int lastMinute = -1, lastDay = -1;
 
 // ---- cấu hình lưu EEPROM: URL tự cập nhật ----
 struct Config { uint32_t magic; char otaUrl[160]; uint8_t mode; } cfg;  // mode: 0 xoay, 1 đồng hồ, 2 mắt
-const uint32_t MAGIC = 0x5C10C001;
+const uint32_t MAGIC = 0x5C10C002;   // đổi magic: cấu hình cũ được chuyển sang mặc định "chỉ mắt"
+void saveCfg() { EEPROM.put(0, cfg); EEPROM.commit(); }
 void loadCfg() {
   EEPROM.begin(sizeof(Config)); EEPROM.get(0, cfg);
-  if (cfg.magic != MAGIC) { memset(&cfg, 0, sizeof cfg); cfg.magic = MAGIC; }
+  if (cfg.magic != MAGIC) {
+    char keep[160]; memcpy(keep, cfg.otaUrl, sizeof keep); keep[159] = 0;
+    bool hadUrl = cfg.magic == 0x5C10C001;
+    memset(&cfg, 0, sizeof cfg); cfg.magic = MAGIC; cfg.mode = 2;
+    if (hadUrl) memcpy(cfg.otaUrl, keep, sizeof keep);
+    saveCfg();
+  }
   if (!cfg.otaUrl[0]) strncpy(cfg.otaUrl, DEFAULT_OTA_URL, sizeof(cfg.otaUrl) - 1);
-  if (cfg.mode > 2) cfg.mode = 0;
+  if (cfg.mode > 2) cfg.mode = 2;
 }
-void saveCfg() { EEPROM.put(0, cfg); EEPROM.commit(); }
 
 // ---- màu ----
 #define C_BG     TFT_BLACK
@@ -149,7 +155,7 @@ void handleRoot() {
   String h = F("<!doctype html><meta name=viewport content='width=device-width'><style>body{font-family:sans-serif;max-width:520px;margin:20px auto;padding:0 12px}input{width:100%;padding:8px;box-sizing:border-box}button{padding:8px 14px;margin-top:8px}</style><h2>Smart Clock</h2>");
   h += "<p>Firmware <b>" FW_VERSION "</b> &middot; IP " + WiFi.localIP().toString() + " &middot; RSSI " + WiFi.RSSI() + " dBm &middot; RAM trong " + ESP.getFreeHeap() + " B</p>";
   h += "<p>Nhiet do: " + String(tempC, 1) + " C, do am " + humid + "% &middot; USD/VND: " + String(usdVnd, 0) + "</p>";
-  const char* modes[] = {"Xoay vong (dong ho 40s / mat 20s)", "Chi dong ho", "Chi mat robot"};
+  const char* modes[] = {"Xoay vong (dong ho 40s / mat 20s)", "Chi dong ho", "Chi mat robot (mac dinh)"};
   h += "<h3>Che do hien thi</h3><form method=post action=/mode>";
   for (int i = 0; i < 3; i++) h += "<label><input type=radio name=m value=" + String(i) + (cfg.mode == i ? " checked" : "") + " style='width:auto'> " + modes[i] + "</label><br>";
   h += "<button>Luu</button></form>";

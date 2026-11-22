@@ -55,11 +55,13 @@ done
 # ctags giả: code đã khai báo hàm trước khi dùng nên không cần sinh prototype
 mkdir -p "$WORK/fakectags"; printf '#!/bin/sh\nexit 0\n' > "$WORK/fakectags/ctags"; chmod +x "$WORK/fakectags/ctags"
 
+rm -rf "$WORK/out"
 "$WORK/arduino-cli" compile \
   -b esp8266com:esp8266:generic:eesz=4M1M,baud=115200,xtal=160 \
   --build-property "runtime.tools.ctags.path=$WORK/fakectags" \
   --build-property "compiler.cpp.extra_flags=-include $SKETCH/tft_setup.h" \
-  --output-dir "$WORK/out" "$SKETCH" 2>&1 | grep -vE "^Error initializing instance|^loading library|SyntaxWarning|words = re.split" || true
+  --output-dir "$WORK/out" "$SKETCH" > "$WORK/compile.log" 2>&1 || { grep -vE "^Error initializing instance|^loading library" "$WORK/compile.log"; echo "BUILD LOI"; exit 1; }
+grep -E "Code in flash|RAM \(global" "$WORK/compile.log" || true
 
 test -f "$WORK/out/smartclock.ino.bin"
 cp "$WORK/out/smartclock.ino.bin" "$OUT/firmware.bin"
