@@ -18,7 +18,7 @@
 #include <TFT_eSPI.h>
 #include <time.h>
 
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.1.1"
 #define DEFAULT_OTA_URL "https://raw.githubusercontent.com/truonglong88/smartclock/main/release/"
 const float LAT = 10.78, LON = 106.70;          // TP.HCM
 
@@ -31,6 +31,8 @@ float tempC = NAN; int humid = -1; int wcode = -1;
 float usdVnd = NAN;
 unsigned long lastWeather = 0, lastFx = 0, lastOta = 0;
 bool otaNow = false;
+bool footerDirty = true;
+String shownIp;
 bool weatherDirty = true, fxDirty = true;
 int lastMinute = -1, lastDay = -1;
 
@@ -209,8 +211,15 @@ void drawScreen() {
       s = "USD  " + o;
     }
     centerText(s, 186, 4, C_FX); fxDirty = false;
-    centerText("smartclock.local  v" FW_VERSION, 222, 1, C_DIM);
+    footerDirty = true;
   }
+}
+
+void drawFooter() {
+  String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("mat WiFi...");
+  if (!footerDirty && ip == shownIp) return;
+  centerText(ip + "   v" FW_VERSION, 222, 2, C_DIM);
+  shownIp = ip; footerDirty = false;
 }
 
 void setup() {
@@ -226,6 +235,10 @@ void setup() {
   Serial.println("[boot] tft ok");
   statusScreen("Smart Clock", "Dang ket noi WiFi...", "v" FW_VERSION);
 
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);   // không ngủ modem: web/OTA luôn trả lời được
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
   WiFiManager wm;
   wm.setConfigPortalTimeout(300);
   wm.setAPCallback([](WiFiManager*) {
@@ -259,5 +272,11 @@ void loop() {
     if (otaNow || slot) { otaNow = false; lastOta = m; checkOta(); }
   }
   static unsigned long lastDraw = 0;
-  if (m - lastDraw >= 250) { lastDraw = m; drawScreen(); }
+  if (m - lastDraw >= 250) { lastDraw = m; drawScreen(); drawFooter(); }
+  // tự kết nối lại nếu rớt WiFi quá 30s
+  static unsigned long lostSince = 0;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (!lostSince) lostSince = m;
+    if (m - lostSince > 30000) { Serial.println("[wifi] reconnect"); WiFi.reconnect(); lostSince = m; }
+  } else lostSince = 0;
 }
