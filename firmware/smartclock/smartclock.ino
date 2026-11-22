@@ -19,7 +19,7 @@
 #include <TFT_eSPI.h>
 #include <time.h>
 
-#define FW_VERSION "1.2.4"
+#define FW_VERSION "1.2.5"
 #define DEFAULT_OTA_URL "https://raw.githubusercontent.com/truonglong88/smartclock/main/release/"
 const float LAT = 10.78, LON = 106.70;          // TP.HCM
 
@@ -66,14 +66,14 @@ void loadCfg() {
 #define C_DIM    0x7BEF
 
 const char* wxText(int c) {
-  if (c == 0) return "Troi quang";
-  if (c <= 2) return "It may";
-  if (c == 3) return "Nhieu may";
-  if (c == 45 || c == 48) return "Suong mu";
-  if (c >= 51 && c <= 57) return "Mua phun";
-  if (c >= 61 && c <= 67) return "Mua";
-  if (c >= 80 && c <= 82) return "Mua rao";
-  if (c >= 95) return "Giong bao";
+  if (c == 0) return "Clear";
+  if (c <= 2) return "Mostly clear";
+  if (c == 3) return "Cloudy";
+  if (c == 45 || c == 48) return "Fog";
+  if (c >= 51 && c <= 57) return "Drizzle";
+  if (c >= 61 && c <= 67) return "Rain";
+  if (c >= 80 && c <= 82) return "Showers";
+  if (c >= 95) return "Thunderstorm";
   return "--";
 }
 
@@ -131,19 +131,19 @@ int cmpVer(const String& a, const String& b) {
   }
   return 0;
 }
-String otaStatus = "chua kiem tra";
+String otaStatus = "not checked yet";
 void checkOta() {
-  if (!cfg.otaUrl[0]) { otaStatus = "chua dat URL"; return; }
+  if (!cfg.otaUrl[0]) { otaStatus = "no URL set"; return; }
   String base = cfg.otaUrl; if (!base.endsWith("/")) base += "/";
   BearSSL::WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(4096, 512);
   HTTPClient http; http.setTimeout(10000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!http.begin(client, base + "version.txt?t=" + String(millis()))) { otaStatus = "loi URL"; return; }
+  if (!http.begin(client, base + "version.txt?t=" + String(millis()))) { otaStatus = "bad URL"; return; }
   int code = http.GET();
   String v = code == 200 ? http.getString() : ""; v.trim(); http.end();
   if (code != 200) { otaStatus = "version.txt HTTP " + String(code); return; }
-  if (v.length() == 0 || cmpVer(v, FW_VERSION) <= 0) { otaStatus = "dang moi nhat (dang chay " FW_VERSION ", GitHub " + v + ")"; return; }
-  statusScreen("Dang cap nhat", String(FW_VERSION) + " -> " + v, "dung rut dien");
+  if (v.length() == 0 || cmpVer(v, FW_VERSION) <= 0) { otaStatus = "up to date (running " FW_VERSION ", GitHub " + v + ")"; return; }
+  statusScreen("Updating", String(FW_VERSION) + " -> " + v, "do not unplug");
   // Tải firmware cần bộ đệm nhận TLS đủ 16KB: GitHub gửi bản ghi TLS 16KB, bộ đệm nhỏ hơn sẽ đứt giữa chừng
   client.stop();
   eyeSpr.deleteSprite();   // nhả ~3.5KB RAM cho TLS
@@ -152,9 +152,9 @@ void checkOta() {
   ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   ESPhttpUpdate.rebootOnUpdate(true);
   t_httpUpdate_return r = ESPhttpUpdate.update(dl, base + "firmware.bin?v=" + v);
-  otaStatus = "cap nhat loi: " + ESPhttpUpdate.getLastErrorString();
+  otaStatus = "update failed: " + ESPhttpUpdate.getLastErrorString();
   Serial.println("[ota] " + otaStatus);
-  statusScreen("Cap nhat loi", ESPhttpUpdate.getLastErrorString().substring(0, 30), "giu ban " FW_VERSION);
+  statusScreen("Update failed", ESPhttpUpdate.getLastErrorString().substring(0, 30), "staying on " FW_VERSION);
   delay(5000);
   eyeSpr.createSprite(SPR_W, SPR_H);
   lastMinute = lastDay = -1; weatherDirty = fxDirty = true; tft.fillScreen(C_BG);
@@ -165,15 +165,15 @@ void checkOta() {
 void handleRoot() {
   time_t now = time(nullptr);
   String h = F("<!doctype html><meta name=viewport content='width=device-width'><style>body{font-family:sans-serif;max-width:520px;margin:20px auto;padding:0 12px}input{width:100%;padding:8px;box-sizing:border-box}button{padding:8px 14px;margin-top:8px}</style><h2>Smart Clock</h2>");
-  h += "<p>Firmware <b>" FW_VERSION "</b> &middot; IP " + WiFi.localIP().toString() + " &middot; RSSI " + WiFi.RSSI() + " dBm &middot; RAM trong " + ESP.getFreeHeap() + " B</p>";
-  h += "<p>Nhiet do: " + String(tempC, 1) + " C, do am " + humid + "% &middot; USD/VND: " + String(usdVnd, 0) + "</p>";
-  const char* modes[] = {"Xoay vong (dong ho 40s / mat 20s)", "Chi dong ho", "Chi mat robot (mac dinh)"};
-  h += "<h3>Che do hien thi</h3><form method=post action=/mode>";
+  h += "<p>Firmware <b>" FW_VERSION "</b> &middot; IP " + WiFi.localIP().toString() + " &middot; RSSI " + WiFi.RSSI() + " dBm &middot; free RAM " + ESP.getFreeHeap() + " B</p>";
+  h += "<p>Temperature: " + String(tempC, 1) + " C, humidity " + humid + "% &middot; USD/VND: " + String(usdVnd, 0) + "</p>";
+  const char* modes[] = {"Rotate (clock 40s / eyes 20s)", "Clock only", "Robot eyes only (default)"};
+  h += "<h3>Display mode</h3><form method=post action=/mode>";
   for (int i = 0; i < 3; i++) h += "<label><input type=radio name=m value=" + String(i) + (cfg.mode == i ? " checked" : "") + " style='width:auto'> " + modes[i] + "</label><br>";
-  h += "<button>Luu</button></form>";
-  h += "<h3>Tu cap nhat</h3><p>Trang thai: " + otaStatus + "</p><form method=post action=/save><label>URL thu muc chua <code>version.txt</code> va <code>firmware.bin</code></label><input name=ota value='" + String(cfg.otaUrl) + "' placeholder='https://raw.githubusercontent.com/ban/smartclock/main/release/'><button>Luu</button></form>";
-  h += "<form method=post action=/check><button>Kiem tra cap nhat ngay</button></form>";
-  h += "<h3>Nap firmware bang tay</h3><p><a href=/update>/update</a> &middot; <a href=/wifi-reset onclick=\"return confirm('Xoa WiFi?')\">Xoa WiFi</a></p>";
+  h += "<button>Save</button></form>";
+  h += "<h3>Auto update</h3><p>Status: " + otaStatus + "</p><form method=post action=/save><label>URL of the folder containing <code>version.txt</code> and <code>firmware.bin</code></label><input name=ota value='" + String(cfg.otaUrl) + "' placeholder='https://raw.githubusercontent.com/you/smartclock/main/release/'><button>Save</button></form>";
+  h += "<form method=post action=/check><button>Check for update now</button></form>";
+  h += "<h3>Manual firmware upload</h3><p><a href=/update>/update</a> &middot; <a href=/wifi-reset onclick=\"return confirm('Forget WiFi?')\">Forget WiFi</a></p>";
   (void)now;
   server.send(200, "text/html; charset=utf-8", h);
 }
@@ -190,7 +190,7 @@ void setupWeb() {
     server.sendHeader("Location", "/"); server.send(303);
   });
   server.on("/check", HTTP_POST, []() { server.sendHeader("Location", "/"); server.send(303); otaNow = true; });
-  server.on("/wifi-reset", []() { server.send(200, "text/plain", "Da xoa WiFi, khoi dong lai..."); delay(500); WiFiManager wm; wm.resetSettings(); ESP.restart(); });
+  server.on("/wifi-reset", []() { server.send(200, "text/plain", "WiFi forgotten, restarting..."); delay(500); WiFiManager wm; wm.resetSettings(); ESP.restart(); });
   server.on("/api", []() {
     String j = String("{\"fw\":\"" FW_VERSION "\",\"temp\":") + (isnan(tempC) ? String("null") : String(tempC, 1)) +
                ",\"humid\":" + humid + ",\"usd_vnd\":" + (isnan(usdVnd) ? String("null") : String(usdVnd, 0)) + "}";
@@ -201,7 +201,7 @@ void setupWeb() {
 }
 
 // ---- vẽ ----
-const char* DOW[] = {"CN", "T2", "T3", "T4", "T5", "T6", "T7"};
+const char* DOW[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
 
 void drawDegree(int x, int y, uint16_t col) { tft.drawCircle(x, y, 4, col); tft.drawCircle(x, y, 3, col); }
 
@@ -234,11 +234,11 @@ void drawScreen() {
       int tw = tft.drawString(s, 18, 124, 6);
       drawDegree(18 + tw + 6, 130, C_WX);
       tft.drawString("C", 18 + tw + 13, 124, 4);
-      tft.drawString(wxText(wcode), 120, 126, 4);
+      { const char* w = wxText(wcode); int f = tft.textWidth(w, 4) <= 116 ? 4 : 2; tft.drawString(w, 120, f == 4 ? 126 : 132, f); }  // chữ dài (Thunderstorm) dùng font nhỏ
       tft.setTextColor(C_DIM, C_BG);
-      tft.drawString("Do am " + String(humid) + "%", 120, 154, 2);
+      tft.drawString("Humidity " + String(humid) + "%", 120, 154, 2);
     } else {
-      centerText("Dang lay thoi tiet...", 140, 2, C_DIM);
+      centerText("Loading weather...", 140, 2, C_DIM);
     }
     weatherDirty = false;
   }
@@ -255,9 +255,15 @@ void drawScreen() {
 }
 
 void drawFooter() {
-  String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("mat WiFi...");
+  String ip;
+  if (WiFi.status() == WL_CONNECTED) {      // 192.168.0.105 -> IP.0.105
+    IPAddress a = WiFi.localIP(); ip = "IP." + String(a[2]) + "." + String(a[3]);
+  } else ip = "no WiFi";
   if (!footerDirty && ip == shownIp) return;
-  centerText(ip + "   v" FW_VERSION, 222, 2, C_DIM);
+  tft.fillRect(0, 220, 240, 20, C_BG);
+  tft.setTextColor(C_DIM, C_BG);
+  tft.setTextDatum(TL_DATUM); tft.drawString(ip, 4, 222, 2);
+  tft.setTextDatum(TR_DATUM); tft.drawString("v" FW_VERSION, 236, 222, 2);
   shownIp = ip; footerDirty = false;
 }
 
@@ -367,7 +373,7 @@ void setup() {
   if (!eyeSpr.createSprite(SPR_W, SPR_H)) Serial.println("[eyes] sprite FAIL");
   randomSeed(ESP.getChipId() ^ micros());
   Serial.println("[boot] tft ok");
-  statusScreen("Smart Clock", "Dang ket noi WiFi...", "v" FW_VERSION);
+  statusScreen("Smart Clock", "Connecting to WiFi...", "v" FW_VERSION);
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleepMode(WIFI_NONE_SLEEP);   // không ngủ modem: web/OTA luôn trả lời được
@@ -376,8 +382,8 @@ void setup() {
   WiFiManager wm;
   wm.setConfigPortalTimeout(300);
   wm.setAPCallback([](WiFiManager*) {
-    statusScreen("Cai WiFi", "Dien thoai ket noi WiFi:", "SmartClock-Setup");
-    centerText("roi mo 192.168.4.1", 160, 2, C_CLOCK);
+    statusScreen("WiFi setup", "Join WiFi on your phone:", "SmartClock-Setup");
+    centerText("then open 192.168.4.1", 160, 2, C_CLOCK);
   });
   Serial.println("[wifi] autoConnect");
   if (!wm.autoConnect("SmartClock-Setup")) ESP.restart();
@@ -387,7 +393,7 @@ void setup() {
   MDNS.begin("smartclock");
   setupWeb();
   MDNS.addService("http", "tcp", 80);
-  statusScreen("Da ket noi", WiFi.localIP().toString(), "http://smartclock.local");
+  statusScreen("Connected", WiFi.localIP().toString(), "http://smartclock.local");
   delay(2500);
   tft.fillScreen(C_BG);
   otaNow = true;  // kiểm tra cập nhật ngay khi vừa khởi động
