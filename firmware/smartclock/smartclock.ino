@@ -19,7 +19,7 @@
 #include <TFT_eSPI.h>
 #include <time.h>
 
-#define FW_VERSION "1.2.2"
+#define FW_VERSION "1.2.3"
 #define DEFAULT_OTA_URL "https://raw.githubusercontent.com/truonglong88/smartclock/main/release/"
 const float LAT = 10.78, LON = 106.70;          // TP.HCM
 
@@ -119,6 +119,18 @@ void fetchFx() {
 }
 
 // ---- tự cập nhật ----
+// So sánh phiên bản dạng a.b.c: trả về >0 nếu a mới hơn b
+int cmpVer(const String& a, const String& b) {
+  int ia = 0, ib = 0;
+  for (int part = 0; part < 3; part++) {
+    long va = a.substring(ia).toInt(), vb = b.substring(ib).toInt();
+    if (va != vb) return va > vb ? 1 : -1;
+    ia = a.indexOf('.', ia); ib = b.indexOf('.', ib);
+    if (ia < 0 || ib < 0) break;
+    ia++; ib++;
+  }
+  return 0;
+}
 String otaStatus = "chua kiem tra";
 void checkOta() {
   if (!cfg.otaUrl[0]) { otaStatus = "chua dat URL"; return; }
@@ -130,7 +142,7 @@ void checkOta() {
   int code = http.GET();
   String v = code == 200 ? http.getString() : ""; v.trim(); http.end();
   if (code != 200) { otaStatus = "version.txt HTTP " + String(code); return; }
-  if (v == FW_VERSION) { otaStatus = "dang moi nhat (" + v + ")"; return; }
+  if (v.length() == 0 || cmpVer(v, FW_VERSION) <= 0) { otaStatus = "dang moi nhat (dang chay " FW_VERSION ", GitHub " + v + ")"; return; }
   statusScreen("Dang cap nhat", String(FW_VERSION) + " -> " + v, "dung rut dien");
   // Tải firmware cần bộ đệm nhận TLS đủ 16KB: GitHub gửi bản ghi TLS 16KB, bộ đệm nhỏ hơn sẽ đứt giữa chừng
   client.stop();
